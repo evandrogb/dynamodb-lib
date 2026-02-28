@@ -84,6 +84,33 @@ interface DynamoRepository<T : DynamoEntity> {
      * EXISTS: Verifica se entidade existe
      */
     suspend fun existsById(id: String): Boolean = getById(id) != null
+
+    /**
+     * SEARCH (GENÉRICO): Busca UM item por propriedade
+     * ⚠️ Requer índice na propriedade para melhor performance
+     */
+    suspend fun getByProperty(propertyName: String, value: Any): T?
+
+    /**
+     * SEARCH (GENÉRICO): Busca TODOS os items por propriedade
+     * ⚠️ Requer índice na propriedade para melhor performance
+     */
+    suspend fun getAllByProperty(propertyName: String, value: Any): List<T>
+
+    /**
+     * SCAN (GENÉRICO): Busca com filtro customizado (lambda)
+     * Mais flexível que getByProperty, mas menos performático
+     */
+    suspend fun scanWithFilter(predicate: (T) -> Boolean): List<T>
+
+    /**
+     * SCAN PAGINADO (GENÉRICO): Busca com filtro E paginação
+     */
+    suspend fun scanWithFilterPaginated(
+        limit: Int,
+        cursor: String?,
+        predicate: (T) -> Boolean
+    ): PageResult<T>
 }
 
 /**

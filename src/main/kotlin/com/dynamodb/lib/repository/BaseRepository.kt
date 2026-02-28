@@ -265,4 +265,166 @@ abstract class BaseRepository<T : DynamoEntity>(
         .getOrThrow()
     }
 
+    /**
+     * Busca UM item por uma propriedade específica (method scan genérico)
+     *
+     * ⚠️ IMPORTANTE: Para usar, certifique-se que a propriedade tem um índice no DynamoDB!
+     *
+     * Exemplo:
+     * ```
+     * val order = getByProperty("email", "user@example.com")
+     * val product = getByProperty("sku", "PROD-123")
+     * ```
+     *
+     * @param propertyName Nome da propriedade (campo da entidade)
+     * @param value Valor para filtrar
+     * @return A primeira entidade que corresponder ao filtro, ou null
+     */
+    override suspend fun getByProperty(propertyName: String, value: Any): T? {
+        return runCatching {
+            val allItems = getAll()
+            allItems.firstOrNull { item ->
+                try {
+                    val field = entityClass.getDeclaredField(propertyName)
+                    field.isAccessible = true
+                    field.get(item) == value
+                } catch (e: Exception) {
+                    logger.warn("Property '$propertyName' not found on ${entityClass.simpleName}", e)
+                    false
+                }
+            }
+        }
+        .onSuccess { item ->
+            if (item != null) {
+                logger.debug("Found item by property '$propertyName'=$value in table $tableName")
+            } else {
+                logger.debug("No item found by property '$propertyName'=$value in table $tableName")
+            }
+        }
+        .onFailure { e ->
+            logger.error("Error searching by property '$propertyName' in table $tableName", e)
+        }
+        .getOrNull()
+    }
+
+    /**
+     * Busca TODOS os items que correspondem a uma propriedade específica
+     *
+     * ⚠️ IMPORTANTE: Para usar com performance, certifique-se que a propriedade tem um índice!
+     *
+     * Exemplo:
+     * ```
+     * val orders = getAllByProperty("status", "PENDING")
+     * val users = getAllByProperty("country", "BR")
+     * ```
+     *
+     * @param propertyName Nome da propriedade (campo da entidade)
+     * @param value Valor para filtrar
+     * @return Lista de todas as entidades que correspondem ao filtro
+     */
+    override suspend fun getAllByProperty(propertyName: String, value: Any): List<T> {
+        return runCatching {
+            val allItems = getAll()
+            allItems.filter { item ->
+                try {
+                    val field = entityClass.getDeclaredField(propertyName)
+                    field.isAccessible = true
+                    field.get(item) == value
+                } catch (e: Exception) {
+                    logger.warn("Property '$propertyName' not found on ${entityClass.simpleName}", e)
+                    false
+                }
+            }
+        }
+        .onSuccess { items ->
+            logger.debug("Found ${items.size} items by property '$propertyName'=$value in table $tableName")
+        }
+        .onFailure { e ->
+            logger.error("Error searching by property '$propertyName' in table $tableName", e)
+        }
+        .getOrDefault(emptyList())
+    }
+
+    /**
+     * Busca items com um filtro customizado (usando função lambda)
+     *
+     * Exemplo:
+     * ```
+     * val recentOrders = scanWithFilter { item -> item.createdAt > oneWeekAgo }
+     * val expensiveItems = scanWithFilter { item -> item.price > 1000 }
+     * ```
+     *
+     * @param predicate Função que retorna true para items que devem ser inclusos
+     * @return Lista de items que satisfazem o predicado
+     */
+    override suspend fun scanWithFilter(predicate: (T) -> Boolean): List<T> {
+        return runCatching {
+            getAll().filter(predicate)
+        }
+        .onSuccess { items ->
+            logger.debug("Scan with filter returned ${items.size} items from table $tableName")
+        }
+        .onFailure { e ->
+            logger.error("Error executing scan with filter on table $tableName", e)
+        }
+        .getOrDefault(emptyList())
+    }
+
+    /**
+     * Busca items com paginação E filtro customizado
+     *
+     * Exemplo:
+     * ```
+     * val result = scanWithFilterPaginated(
+     *     limit = 20,
+     *     predicate = { item -> item.status == "ACTIVE" }
+     * )
+     * ```
+     *
+     * @param limit Quantos items retornar
+     * @param cursor Cursor para paginação
+     * @param predicate Função que retorna true para items que devem ser inclusos
+     * @return PageResult com items filtrados e paginados
+     */
+    override suspend fun scanWithFilterPaginated(
+        limit: Int,
+        cursor: String?,
+        predicate: (T) -> Boolean
+    ): PageResult<T> {
+        return runCatching {
+            val allItems = getAll()
+            val filteredItems = allItems.filter(predicate)
+            val totalItems = count()
+
+            // Encontrar índice inicial baseado no cursor
+            val startIndex = cursor?.let { parseCursor(it, filteredItems) } ?: 0
+
+            // Extrair página
+            val endIndex = (startIndex + limit).coerceAtMost(filteredItems.size)
+            val pageItems = filteredItems.subList(startIndex, endIndex)
+
+            // Calcular próximo cursor
+            val nextCursor = if (endIndex < filteredItems.size && pageItems.isNotEmpty()) {
+                encodeCursor(pageItems.last())
+            } else {
+                null
+            }
+
+            PageResult(
+                items = pageItems,
+                itemCount = pageItems.size,
+                totalItems = filteredItems.size.toLong(),
+                nextCursor = nextCursor,
+                previousCursor = cursor
+            )
+        }
+        .onSuccess { result ->
+            logger.debug("Scan with filter paginated returned ${result.itemCount}/${result.totalItems} items from $tableName")
+        }
+        .onFailure { e ->
+            logger.error("Error executing scan with filter paginated on table $tableName", e)
+        }
+        .getOrThrow()
+    }
+
 }
