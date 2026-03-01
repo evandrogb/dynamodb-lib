@@ -221,6 +221,7 @@ abstract class BaseRepository<T : DynamoEntity>(
 
     /**
      * Override este método para customizar a ordenação
+     * Implementação padrão: suporta 'id' e 'createdAt' (campos comuns de DynamoEntity)
      */
     protected open fun applySorting(
         items: List<T>,
@@ -228,23 +229,39 @@ abstract class BaseRepository<T : DynamoEntity>(
         sortOrder: SortOrder
     ): List<T> {
         logger.debug("Applying sort by '$sortBy' in ${sortOrder.name} order")
-        return items // Override em subclasses
+        val sorted = when (sortBy.lowercase()) {
+            "id" -> items.sortedBy { it.id ?: "" }
+            "createdat", "created_at" -> items.sortedBy { it.createdAt ?: 0 }
+            else -> {
+                logger.warn("Unknown sort field: $sortBy, returning unsorted")
+                items
+            }
+        }
+        return if (sortOrder == SortOrder.DESC) sorted.reversed() else sorted
     }
 
     /**
      * Override este método para customizar o parsing do cursor
+     * Implementação padrão: extrai ID do cursor e encontra o índice na lista
      * @param cursor String do cursor (pode ser Base64 ou outro formato)
      * @param items Lista ordenada de items para buscar a posição do cursor
      */
     protected open fun parseCursor(cursor: String, items: List<T>): Int {
-        return 0 // Override em subclasses
+        return runCatching {
+            val cursorId = cursor.extractCursorId() ?: return 0
+            val index = items.indexOfFirst { it.id == cursorId }
+            if (index >= 0) index else 0
+        }.onFailure { e ->
+            logger.warn("Failed to parse cursor: $cursor", e)
+        }.getOrDefault(0)
     }
 
     /**
      * Override este método para customizar a codificação do cursor
+     * Implementação padrão: codifica ID em Base64 usando toCursor()
      */
     protected open fun encodeCursor(item: T): String? {
-        return item.id // Override em subclasses
+        return item.id?.toCursor()
     }
 
     override suspend fun count(): Long {
